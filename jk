@@ -1,0 +1,91 @@
+import boto3
+import json
+import os
+import requests
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# AWS Configuration from .env
+AWS_USER = os.getenv("AWS_USER")
+AWS_PASS = os.getenv("AWS_PASS")
+REGION_NAME = os.getenv("REGION_NAME")
+AWS_JWT_TOKEN_URL = os.getenv("AWS_JWT_TOKEN_URL")
+AWS_SESSION_TOKEN_URL = os.getenv("AWS_SESSION_TOKEN_URL")
+AWS_ROLE_ARN = os.getenv("AWS_ROLE_ARN")
+BEDROCK_VPC_ENDPOINT = os.getenv("BEDROCK_VPC_ENDPOINT")
+KNOWLEDGE_BASE_ID = os.getenv("KNOWLEDGE_BASE_ID")
+
+def get_jwt_token():
+    """Fetch JWT token using AWS credentials."""
+    try:
+        response = requests.post(AWS_JWT_TOKEN_URL, auth=(AWS_USER, AWS_PASS))
+        response.raise_for_status()
+        token = response.json().get("access_token")
+        return token
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error fetching JWT token: {str(e)}")
+        return None
+
+def get_aws_session():
+    """Generate temporary session credentials using AWS STS."""
+    sts_client = boto3.client("sts", region_name=REGION_NAME)
+
+    try:
+        response = sts_client.assume_role(
+            RoleArn=AWS_ROLE_ARN,
+            RoleSessionName="BedrockSession"
+        )
+        credentials = response["Credentials"]
+        return credentials["AccessKeyId"], credentials["SecretAccessKey"], credentials["SessionToken"]
+
+    except Exception as e:
+        print(f"❌ Error fetching AWS session: {str(e)}")
+        return None, None, None
+
+def query_knowledge_base(user_query):
+    """Query AWS Bedrock Knowledge Base using Claude 3 Haiku."""
+    print("🔹 Generating JWT token...")
+    jwt_token = get_jwt_token()
+    if not jwt_token:
+        print("❌ Could not retrieve JWT token. Exiting.")
+        return
+    
+    print("🔹 Generating temporary AWS credentials...")
+    access_key, secret_key, session_token = get_aws_session()
+    if not access_key:
+        print("❌ Could not generate AWS credentials. Exiting.")
+        return
+
+    print("✅ Connected to AWS Bedrock with temporary credentials.")
+
+    bedrock_runtime = boto3.client(
+        "bedrock-runtime",
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        aws_session_token=session_token,
+        region_name=REGION_NAME
+    )
+
+    payload = {
+        "knowledgeBaseId": KNOWLEDGE_BASE_ID,
+        "modelArn": "arn:aws:bedrock:eu-west-1:anthropic:foundation-model/claude-3-haiku-20240307",
+        "retrievalConfiguration": {"type": "KNOWLEDGE_BASE_ONLY"},
+        "input": {"text": user_query},
+    }
+
+    try:
+        response = bedrock_runtime.invoke_model(body=json.dumps(payload))
+        response_body = json.loads(response["body"].read())
+        answer = response_body.get("output", {}).get("text", "No response from knowledge base.")
+
+        print("\n🔍 Claude 3 Haiku's Response:\n")
+        print(answer)
+
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+
+if __name__ == "__main__":
+    user_input = input("Ask a question to the Knowledge Base: ")
+    query_knowledge_base(user_input)
