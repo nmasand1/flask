@@ -1,108 +1,126 @@
 import os
+import json
+import logging
+import logging.config
 import requests
-import boto3
-import urllib3
+import uuid
+import yaml
+import streamlit as st
 from dotenv import load_dotenv
+from services import bedrock_agent_runtime
 
-# Suppress SSL warnings if using unverified requests
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
-AWS_USER = os.getenv("AWS_USER")
-AWS_PASS = os.getenv("AWS_PASS")
-REGION_NAME = os.getenv("REGION_NAME")
-AWS_JWT_TOKEN_URL = os.getenv("AWS_JWT_TOKEN_URL")
-AWS_SESSION_TOKEN_URL = os.getenv("AWS_SESSION_TOKEN_URL")
-AWS_ROLE_ARN = os.getenv("AWS_ROLE_ARN")
-BEDROCK_VPC_ENDPOINT = os.getenv("BEDROCK_VPC_ENDPOINT")
-KNOWLEDGE_BASE_ID = os.getenv("KNOWLEDGE_BASE_ID")
+# Configure logging using YAML if available
+if os.path.exists("logging.yaml"):
+    with open("logging.yaml", "r") as file:
+        config = yaml.safe_load(file)
+        logging.config.dictConfig(config)
+else:
+    log_level = logging.getLevelNamesMapping().get(os.environ.get("LOG_LEVEL", "INFO"), logging.INFO)
+    logging.basicConfig(level=log_level)
 
-# Claude 3 Haiku Model ARN (replace REGION with your AWS region)
-CLAUDE_3_HAIKU_ARN = f"arn:aws:bedrock:{REGION_NAME}::foundation-model/anthropic.claude-3-haiku"
+logger = logging.getLogger(__name__)
 
+# Get AWS credentials
 def get_aws_credentials():
-    """Authenticate with AWS and retrieve temporary credentials"""
-    try:
-        jwt_response = requests.post(
-            AWS_JWT_TOKEN_URL,
-            json={"username": AWS_USER, "password": AWS_PASS},
-            headers={"content-type": "application/json", "accept": "*/*"},
-            verify=False
-        )
-        jwt_response.raise_for_status()
-        jwt_token = jwt_response.json().get("token")
+    jwt_response = requests.post(
+        os.getenv("AWS_JWT_TOKEN_URL"),
+        json={"username": os.getenv("AWS_USER"), "password": os.getenv("AWS_PASS")},
+        headers={"content-type": "application/json", "accept": "*"},
+        verify=False
+    )
+    jwt_token = jwt_response.json()["token"]
+    creds_response = requests.get(
+        f"{os.getenv('AWS_SESSION_TOKEN_URL')}{os.getenv('AWS_ROLE_ARN')}",
+        headers={"authorization": f"Bearer {jwt_token}"},
+        verify=False
+    )
+    return creds_response.json()["Credentials"]
 
-        if not jwt_token:
-            raise ValueError("JWT token not received.")
+# Get config from environment variables
+agent_id = os.getenv("BEDROCK_AGENT_ID")
+agent_alias_id = os.getenv("BEDROCK_AGENT_ALIAS_ID", "TSTALIASID")
+ui_title = os.getenv("BEDROCK_AGENT_TEST_UI_TITLE", "Agents for Amazon Bedrock Test UI")
+ui_icon = os.getenv("BEDROCK_AGENT_TEST_UI_ICON")
 
-        creds_response = requests.get(
-            f"{AWS_SESSION_TOKEN_URL}{AWS_ROLE_ARN}",
-            headers={"authorization": f"Bearer {jwt_token}"},
-            verify=False
-        )
-        creds_response.raise_for_status()
+def init_session_state():
+    st.session_state.session_id = str(uuid.uuid4())
+    st.session_state.messages = []
+    st.session_state.citations = []
+    st.session_state.trace = {}
 
-        credentials = creds_response.json().get("Credentials")
-        if not credentials:
-            raise ValueError("AWS credentials not received.")
+# General page configuration
+st.set_page_config(page_title=ui_title, page_icon=ui_icon, layout="wide")
+st.title(ui_title)
+if len(st.session_state.items()) == 0:
+    init_session_state()
 
-        return credentials
+# Sidebar button to reset session state
+with st.sidebar:
+    if st.button("Reset Session"):
+        init_session_state()
 
-    except requests.exceptions.RequestException as e:
-        print(f"Error in authentication request: {e}")
-        return None
+# Display chat messages
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"], unsafe_allow_html=True)
 
-def format_vpc_endpoint(endpoint):
-    """Ensure the VPC endpoint starts with 'https://'"""
-    if not endpoint.startswith("http"):
-        return f"https://{endpoint}"
-    return endpoint
+# Chat input handling
+if prompt := st.chat_input():
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.write(prompt)
 
-def ask_knowledge_base(question):
-    """Query AWS Bedrock Knowledge Base with a question using Claude 3 Haiku"""
-    creds = get_aws_credentials()
-    if not creds:
-        print("Failed to retrieve AWS credentials.")
-        return None
+    with st.chat_message("assistant"):
+        with st.spinner():
+            response = bedrock_agent_runtime.invoke_agent(
+                agent_id, agent_alias_id, st.session_state.session_id, prompt
+            )
+            output_text = response["output_text"]
 
-    try:
-        session = boto3.Session(
-            aws_access_key_id=creds["AccessKeyId"],
-            aws_secret_access_key=creds["SecretAccessKey"],
-            aws_session_token=creds["SessionToken"],
-            region_name=REGION_NAME
-        )
+            # Parse JSON response if applicable
+            try:
+                output_json = json.loads(output_text, strict=False)
+                if "instruction" in output_json and "result" in output_json:
+                    output_text = output_json["result"]
+            except json.JSONDecodeError:
+                pass
 
-        # Ensure VPC Endpoint URL is correctly formatted
-        formatted_vpc_endpoint = format_vpc_endpoint(BEDROCK_VPC_ENDPOINT)
+            # Process citations
+            if response["citations"]:
+                citation_num = 1
+                output_text = re.sub(r"%\[(\d+)\]%", r"<sup>[\1]</sup>", output_text)
+                citation_locs = ""
+                for citation in response["citations"]:
+                    for retrieved_ref in citation["retrievedReferences"]:
+                        citation_marker = f"[{citation_num}]"
+                        citation_locs += f"\n<br>{citation_marker} {retrieved_ref['location'].get('url', 'Unknown Source')}"
+                        citation_num += 1
+                output_text += f"\n{citation_locs}"
 
-        # Connect to Bedrock Agent
-        bedrock_agent = session.client("bedrock-agent-runtime", endpoint_url=formatted_vpc_endpoint)
+            st.session_state.messages.append({"role": "assistant", "content": output_text})
+            st.session_state.citations = response["citations"]
+            st.session_state.trace = response["trace"]
+            st.markdown(output_text, unsafe_allow_html=True)
 
-        # Corrected API Call with `modelArn`
-        response = bedrock_agent.retrieve_and_generate(
-            input={"text": question},  # The actual question to ask
-            retrieveAndGenerateConfiguration={
-                "type": "KNOWLEDGE_BASE",  # Required type field
-                "modelArn": CLAUDE_3_HAIKU_ARN,  # Claude 3 Haiku model ARN
-                "knowledgeBaseConfiguration": {
-                    "knowledgeBaseId": KNOWLEDGE_BASE_ID  # Correct parameter for knowledge base
-                }
-            }
-        )
-
-        return response
-
-    except ValueError as ve:
-        print(f"Configuration Error: {ve}")
-    except Exception as e:
-        print(f"Error querying Knowledge Base: {e}")
-
-if __name__ == "__main__":
-    question = "What is AWS Bedrock?"
-    response = ask_knowledge_base(question)
+# Sidebar trace display
+with st.sidebar:
+    st.title("Trace")
+    step_num = 1
+    for trace_type in ["preGuardrailTrace", "orchestrationTrace", "postGuardrailTrace"]:
+        if trace_type in st.session_state.trace:
+            st.subheader(trace_type.replace("Trace", ""))
+            for trace in st.session_state.trace[trace_type]:
+                with st.expander(f"Trace Step {step_num}"):
+                    st.code(json.dumps(trace, indent=2), language="json")
+                step_num += 1
     
-    if response:
-        print(response)
+    st.subheader("Citations")
+    if st.session_state.citations:
+        for i, citation in enumerate(st.session_state.citations, start=1):
+            with st.expander(f"Citation [{i}]"):
+                st.code(json.dumps(citation, indent=2), language="json")
+    else:
+        st.text("None")
