@@ -57,8 +57,8 @@ def format_vpc_endpoint(endpoint):
         return f"https://{endpoint}"
     return endpoint
 
-def connect_to_knowledge_base():
-    """Connect to AWS Knowledge Base using retrieved credentials"""
+def ask_knowledge_base(question):
+    """Query AWS Bedrock Knowledge Base with a question"""
     creds = get_aws_credentials()
     if not creds:
         print("Failed to retrieve AWS credentials.")
@@ -75,11 +75,13 @@ def connect_to_knowledge_base():
         # Ensure VPC Endpoint URL is correctly formatted
         formatted_vpc_endpoint = format_vpc_endpoint(BEDROCK_VPC_ENDPOINT)
 
+        # Connect to Bedrock Agent
         bedrock_agent = session.client("bedrock-agent-runtime", endpoint_url=formatted_vpc_endpoint)
 
-        response = bedrock_agent.retrieve(
+        # Query the Knowledge Base
+        response = bedrock_agent.retrieve_and_generate(
             knowledgeBaseId=KNOWLEDGE_BASE_ID,
-            retrievalQuery={"text": "example query"}
+            retrievalQuery={"text": question}
         )
 
         return response
@@ -87,9 +89,11 @@ def connect_to_knowledge_base():
     except ValueError as ve:
         print(f"Configuration Error: {ve}")
     except Exception as e:
-        print(f"Error connecting to Knowledge Base: {e}")
+        print(f"Error querying Knowledge Base: {e}")
 
 if __name__ == "__main__":
-    response = connect_to_knowledge_base()
+    question = "What is AWS Bedrock?"
+    response = ask_knowledge_base(question)
+    
     if response:
         print(response)
