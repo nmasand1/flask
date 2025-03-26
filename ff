@@ -15,64 +15,47 @@ AWS_ROLE_ARN = os.getenv("AWS_ROLE_ARN")
 BEDROCK_VPC_ENDPOINT = os.getenv("BEDROCK_VPC_ENDPOINT")
 KNOWLEDGE_BASE_ID = os.getenv("KNOWLEDGE_BASE_ID")
 
-
 def get_aws_credentials():
-    """Authenticate using JWT and retrieve AWS credentials."""
-    try:
-        jwt_response = requests.post(
-            AWS_JWT_TOKEN_URL,
-            json={"username": AWS_USER, "password": AWS_PASS},
-            headers={"content-type": "application/json", "accept": "*"},
-            verify=False
-        )
-        jwt_response.raise_for_status()
-        jwt_token = jwt_response.json().get("token")
+    """Authenticate with AWS and retrieve temporary credentials"""
+    jwt_response = requests.post(
+        AWS_JWT_TOKEN_URL,
+        json={"username": AWS_USER, "password": AWS_PASS},
+        headers={"content-type": "application/json", "accept": "*/*"},
+        verify=False
+    )
+    
+    jwt_response.raise_for_status()
+    jwt_token = jwt_response.json()["token"]
 
-        creds_response = requests.get(
-            f"{AWS_SESSION_TOKEN_URL}{AWS_ROLE_ARN}",
-            headers={"authorization": f"Bearer {jwt_token}"},
-            verify=False
-        )
-        creds_response.raise_for_status()
+    creds_response = requests.get(
+        f"{AWS_SESSION_TOKEN_URL}{AWS_ROLE_ARN}",
+        headers={"authorization": f"Bearer {jwt_token}"},
+        verify=False
+    )
 
-        return creds_response.json().get("Credentials")
-
-    except requests.RequestException as e:
-        print(f"Error fetching AWS credentials: {e}")
-        return None
-
+    creds_response.raise_for_status()
+    return creds_response.json()["Credentials"]
 
 def connect_to_knowledge_base():
-    """Use AWS credentials to connect to the AWS Knowledge Base."""
-    credentials = get_aws_credentials()
-    if not credentials:
-        print("Failed to retrieve credentials.")
-        return
+    """Connect to AWS Knowledge Base using retrieved credentials"""
+    creds = get_aws_credentials()
 
     session = boto3.Session(
-        aws_access_key_id=credentials["AccessKeyId"],
-        aws_secret_access_key=credentials["SecretAccessKey"],
-        aws_session_token=credentials["SessionToken"],
+        aws_access_key_id=creds["AccessKeyId"],
+        aws_secret_access_key=creds["SecretAccessKey"],
+        aws_session_token=creds["SessionToken"],
         region_name=REGION_NAME
     )
 
-    # Initialize the AWS Bedrock client
-    bedrock_client = session.client(
-        "bedrock-agent-runtime",
-        endpoint_url=BEDROCK_VPC_ENDPOINT
+    bedrock_agent = session.client("bedrock-agent-runtime", endpoint_url=BEDROCK_VPC_ENDPOINT)
+
+    response = bedrock_agent.retrieve(
+        knowledgeBaseId=KNOWLEDGE_BASE_ID,
+        retrievalQuery={"text": "example query"}
     )
 
-    try:
-        # Fetch knowledge base details
-        response = bedrock_client.get_knowledge_base(
-            knowledgeBaseId=KNOWLEDGE_BASE_ID
-        )
-        print("Knowledge Base Details:")
-        print(response)
-
-    except Exception as e:
-        print(f"Error connecting to AWS Knowledge Base: {e}")
-
+    return response
 
 if __name__ == "__main__":
-    connect_to_knowledge_base()
+    response = connect_to_knowledge_base()
+    print(response)
