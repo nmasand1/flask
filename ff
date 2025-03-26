@@ -1,7 +1,11 @@
 import os
 import requests
 import boto3
+import urllib3
 from dotenv import load_dotenv
+
+# Suppress SSL warnings if using unverified requests
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -17,45 +21,70 @@ KNOWLEDGE_BASE_ID = os.getenv("KNOWLEDGE_BASE_ID")
 
 def get_aws_credentials():
     """Authenticate with AWS and retrieve temporary credentials"""
-    jwt_response = requests.post(
-        AWS_JWT_TOKEN_URL,
-        json={"username": AWS_USER, "password": AWS_PASS},
-        headers={"content-type": "application/json", "accept": "*/*"},
-        verify=False
-    )
-    
-    jwt_response.raise_for_status()
-    jwt_token = jwt_response.json()["token"]
+    try:
+        jwt_response = requests.post(
+            AWS_JWT_TOKEN_URL,
+            json={"username": AWS_USER, "password": AWS_PASS},
+            headers={"content-type": "application/json", "accept": "*/*"},
+            verify=False  # Disable SSL verification if needed
+        )
+        jwt_response.raise_for_status()
+        jwt_token = jwt_response.json().get("token")
 
-    creds_response = requests.get(
-        f"{AWS_SESSION_TOKEN_URL}{AWS_ROLE_ARN}",
-        headers={"authorization": f"Bearer {jwt_token}"},
-        verify=False
-    )
+        if not jwt_token:
+            raise ValueError("JWT token not received.")
 
-    creds_response.raise_for_status()
-    return creds_response.json()["Credentials"]
+        creds_response = requests.get(
+            f"{AWS_SESSION_TOKEN_URL}{AWS_ROLE_ARN}",
+            headers={"authorization": f"Bearer {jwt_token}"},
+            verify=False
+        )
+        creds_response.raise_for_status()
+
+        credentials = creds_response.json().get("Credentials")
+        if not credentials:
+            raise ValueError("AWS credentials not received.")
+
+        return credentials
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error in authentication request: {e}")
+        return None
 
 def connect_to_knowledge_base():
     """Connect to AWS Knowledge Base using retrieved credentials"""
     creds = get_aws_credentials()
+    if not creds:
+        print("Failed to retrieve AWS credentials.")
+        return None
 
-    session = boto3.Session(
-        aws_access_key_id=creds["AccessKeyId"],
-        aws_secret_access_key=creds["SecretAccessKey"],
-        aws_session_token=creds["SessionToken"],
-        region_name=REGION_NAME
-    )
+    try:
+        session = boto3.Session(
+            aws_access_key_id=creds["AccessKeyId"],
+            aws_secret_access_key=creds["SecretAccessKey"],
+            aws_session_token=creds["SessionToken"],
+            region_name=REGION_NAME
+        )
 
-    bedrock_agent = session.client("bedrock-agent-runtime", endpoint_url=BEDROCK_VPC_ENDPOINT)
+        # Ensure VPC Endpoint URL has a valid format
+        if not BEDROCK_VPC_ENDPOINT.startswith("https://"):
+            raise ValueError("Invalid VPC endpoint format. Ensure it starts with 'https://'.")
 
-    response = bedrock_agent.retrieve(
-        knowledgeBaseId=KNOWLEDGE_BASE_ID,
-        retrievalQuery={"text": "example query"}
-    )
+        bedrock_agent = session.client("bedrock-agent-runtime", endpoint_url=BEDROCK_VPC_ENDPOINT)
 
-    return response
+        response = bedrock_agent.retrieve(
+            knowledgeBaseId=KNOWLEDGE_BASE_ID,
+            retrievalQuery={"text": "example query"}
+        )
+
+        return response
+
+    except ValueError as ve:
+        print(f"Configuration Error: {ve}")
+    except Exception as e:
+        print(f"Error connecting to Knowledge Base: {e}")
 
 if __name__ == "__main__":
     response = connect_to_knowledge_base()
-    print(response)
+    if response:
+        print(response)
