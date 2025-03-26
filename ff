@@ -51,6 +51,12 @@ def get_aws_credentials():
         print(f"Error in authentication request: {e}")
         return None
 
+def format_vpc_endpoint(endpoint):
+    """Ensure the VPC endpoint starts with 'https://'"""
+    if not endpoint.startswith("http"):
+        return f"https://{endpoint}"
+    return endpoint
+
 def connect_to_knowledge_base():
     """Connect to AWS Knowledge Base using retrieved credentials"""
     creds = get_aws_credentials()
@@ -66,11 +72,10 @@ def connect_to_knowledge_base():
             region_name=REGION_NAME
         )
 
-        # Ensure VPC Endpoint URL has a valid format
-        if not BEDROCK_VPC_ENDPOINT.startswith("https://"):
-            raise ValueError("Invalid VPC endpoint format. Ensure it starts with 'https://'.")
+        # Ensure VPC Endpoint URL is correctly formatted
+        formatted_vpc_endpoint = format_vpc_endpoint(BEDROCK_VPC_ENDPOINT)
 
-        bedrock_agent = session.client("bedrock-agent-runtime", endpoint_url=BEDROCK_VPC_ENDPOINT)
+        bedrock_agent = session.client("bedrock-agent-runtime", endpoint_url=formatted_vpc_endpoint)
 
         response = bedrock_agent.retrieve(
             knowledgeBaseId=KNOWLEDGE_BASE_ID,
