@@ -19,6 +19,9 @@ AWS_ROLE_ARN = os.getenv("AWS_ROLE_ARN")
 BEDROCK_VPC_ENDPOINT = os.getenv("BEDROCK_VPC_ENDPOINT")
 KNOWLEDGE_BASE_ID = os.getenv("KNOWLEDGE_BASE_ID")
 
+# Claude 3 Haiku Model ARN (replace REGION with your AWS region)
+CLAUDE_3_HAIKU_ARN = f"arn:aws:bedrock:{REGION_NAME}::foundation-model/anthropic.claude-3-haiku"
+
 def get_aws_credentials():
     """Authenticate with AWS and retrieve temporary credentials"""
     try:
@@ -58,7 +61,7 @@ def format_vpc_endpoint(endpoint):
     return endpoint
 
 def ask_knowledge_base(question):
-    """Query AWS Bedrock Knowledge Base with a question"""
+    """Query AWS Bedrock Knowledge Base with a question using Claude 3 Haiku"""
     creds = get_aws_credentials()
     if not creds:
         print("Failed to retrieve AWS credentials.")
@@ -78,11 +81,12 @@ def ask_knowledge_base(question):
         # Connect to Bedrock Agent
         bedrock_agent = session.client("bedrock-agent-runtime", endpoint_url=formatted_vpc_endpoint)
 
-        # Corrected API Call
+        # Corrected API Call with `modelArn`
         response = bedrock_agent.retrieve_and_generate(
             input={"text": question},  # The actual question to ask
             retrieveAndGenerateConfiguration={
                 "type": "KNOWLEDGE_BASE",  # Required type field
+                "modelArn": CLAUDE_3_HAIKU_ARN,  # Claude 3 Haiku model ARN
                 "knowledgeBaseConfiguration": {
                     "knowledgeBaseId": KNOWLEDGE_BASE_ID  # Correct parameter for knowledge base
                 }
