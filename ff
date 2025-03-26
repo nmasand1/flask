@@ -82,7 +82,10 @@ def ask_knowledge_base(question):
         response = bedrock_agent.retrieve_and_generate(
             input={"text": question},  # The actual question to ask
             retrieveAndGenerateConfiguration={
-                "knowledgeBaseId": KNOWLEDGE_BASE_ID  # Specify the knowledge base
+                "type": "KNOWLEDGE_BASE",  # Required type field
+                "knowledgeBaseConfiguration": {
+                    "knowledgeBaseId": KNOWLEDGE_BASE_ID  # Correct parameter for knowledge base
+                }
             }
         )
 
