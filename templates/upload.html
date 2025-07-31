@@ -1,4 +1,8 @@
-<!DOCTYPE html>
+<!-- 
+
+
+
+<<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -14,15 +18,11 @@
     
     <div class="container">
         <h2>Upload CSV Files and Configuration</h2>
-        
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }}">{{ message }}</div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-        
+
+        {% if error_message %}
+            <div class="alert alert-danger">{{ error_message }}</div>
+        {% endif %}
+
         <form method="POST" enctype="multipart/form-data">
             <div class="form-group">
                 <label for="yml_file">YAML Configuration File:</label>
@@ -47,4 +47,225 @@
         document.getElementById("currentYear").innerText = new Date().getFullYear();
     </script>
 </body>
+</html> -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSV Comparison Tool</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="header">
+        <img src="{{ url_for('static', filename='barclayslogo.png') }}" alt="Barclays Logo" class="logo">
+        <h1>CSV Comparison Tool</h1>
+    </div>
+    
+    <div class="container">
+        <h2>Upload CSV Files</h2>
+        <p>{{ description }}</p>
+
+        <p>Please upload two CSV files for comparison. Ensure only CSV files are uploaded.</p>
+
+        {% if error_message %}
+            <div class="alert alert-danger">{{ error_message }}</div>
+        {% endif %}
+
+        <form method="POST" enctype="multipart/form-data">
+            <div class="form-group">
+                <label for="csv1_file">Upload CSV 1:</label>
+                <input type="file" name="csv1_file" id="csv1_file" required class="form-control" onchange="loadColumns('csv1')">
+                <div id="csv1_info" class="file-info"></div>
+            </div>
+
+            <div class="form-group">
+                <label for="csv2_file">Upload CSV 2:</label>
+                <input type="file" name="csv2_file" id="csv2_file" required class="form-control" onchange="loadColumns('csv2')">
+                <div id="csv2_info" class="file-info"></div>
+            </div>
+
+            <!-- CSV1 Column Filter -->
+            <div class="form-group" id="csv1_columns_section" style="display: none;">
+                <label>CSV1 Available Columns:</label>
+                <div id="csv1_columns" class="column-checkboxes"></div>
+            </div>
+
+            <!-- CSV2 Column Filter -->
+            <div class="form-group" id="csv2_columns_section" style="display: none;">
+                <label>CSV2 Available Columns:</label>
+                <div id="csv2_columns" class="column-checkboxes"></div>
+            </div>
+
+            <!-- Selected Columns Display -->
+            <div class="form-group" id="selected_columns_section" style="display: none;">
+                <label>Selected Columns for Comparison:</label>
+                <div id="selected_columns_display" class="selected-columns"></div>
+                <input type="hidden" name="columns" id="columns_input" required>
+            </div>
+
+            <div class="form-group">
+                <label for="columns">Or Manually Enter Columns (comma-separated):</label>
+                <input type="text" name="manual_columns" id="manual_columns" class="form-control" placeholder="e.g., name, age, country" onchange="updateSelectedColumns()">
+            </div>
+
+            <div class="form-group">
+                <label for="data_start_row_csv1">Data Start Row (CSV 1):</label>
+                <input type="number" name="data_start_row_csv1" id="data_start_row_csv1" class="form-control" placeholder="Enter row number" value="0">
+            </div>
+
+            <div class="form-group">
+                <label for="data_start_row_csv2">Data Start Row (CSV 2):</label>
+                <input type="number" name="data_start_row_csv2" id="data_start_row_csv2" class="form-control" placeholder="Enter row number" value="0">
+            </div>
+
+            <div class="form-group">
+                <label for="order">Comparison Order:</label>
+                <select name="order" class="form-control">
+                    <option value="1">CSV 1 against CSV 2</option>
+                    <option value="2">CSV 2 against CSV 1</option>
+                </select>
+            </div>
+
+            <button type="submit" class="btn">Upload and Compare</button>
+        </form>
+    </div>
+
+    <footer>
+        &copy; <span id="currentYear"></span> Barclays. All rights reserved.
+    </footer>
+
+    <script>
+        document.getElementById("currentYear").innerText = new Date().getFullYear();
+        
+        let csv1Columns = [];
+        let csv2Columns = [];
+        let selectedColumns = new Set();
+        
+        async function loadColumns(csvType) {
+            const fileInput = document.getElementById(csvType + '_file');
+            const infoDiv = document.getElementById(csvType + '_info');
+            const columnsDiv = document.getElementById(csvType + '_columns');
+            const columnsSection = document.getElementById(csvType + '_columns_section');
+            const dataStartRow = document.getElementById('data_start_row_' + csvType).value || 0;
+            
+            if (!fileInput.files[0]) return;
+            
+            infoDiv.innerHTML = '<div class="loading">Loading columns...</div>';
+            
+            const formData = new FormData();
+            formData.append('csv_file', fileInput.files[0]);
+            formData.append('data_start_row', dataStartRow);
+            
+            try {
+                const response = await fetch('/get_columns', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    infoDiv.innerHTML = '<div class="error">Error: ' + data.error + '</div>';
+                    return;
+                }
+                
+                // Store columns
+                if (csvType === 'csv1') {
+                    csv1Columns = data.columns;
+                } else {
+                    csv2Columns = data.columns;
+                }
+                
+                // Display file info
+                infoDiv.innerHTML = `<div class="success">✓ Loaded ${data.total_rows} rows, Delimiter: '${data.delimiter}'</div>`;
+                
+                // Create checkboxes for columns
+                columnsDiv.innerHTML = '';
+                data.columns.forEach(column => {
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.id = csvType + '_' + column;
+                    checkbox.value = column;
+                    checkbox.onchange = () => updateSelectedColumns();
+                    
+                    const label = document.createElement('label');
+                    label.htmlFor = checkbox.id;
+                    label.textContent = column;
+                    
+                    const div = document.createElement('div');
+                    div.className = 'checkbox-item';
+                    div.appendChild(checkbox);
+                    div.appendChild(label);
+                    
+                    columnsDiv.appendChild(div);
+                });
+                
+                columnsSection.style.display = 'block';
+                updateSelectedColumns();
+                
+            } catch (error) {
+                infoDiv.innerHTML = '<div class="error">Error loading columns: ' + error.message + '</div>';
+            }
+        }
+        
+        function updateSelectedColumns() {
+            selectedColumns.clear();
+            
+            // Get selected columns from checkboxes
+            const csv1Checkboxes = document.querySelectorAll('#csv1_columns input[type="checkbox"]:checked');
+            const csv2Checkboxes = document.querySelectorAll('#csv2_columns input[type="checkbox"]:checked');
+            
+            // Find common columns between CSV1 and CSV2
+            const commonColumns = [];
+            csv1Checkboxes.forEach(cb => {
+                const columnName = cb.value;
+                const csv2HasColumn = Array.from(csv2Checkboxes).some(cb2 => cb2.value === columnName);
+                if (csv2HasColumn) {
+                    commonColumns.push(columnName);
+                    selectedColumns.add(columnName);
+                }
+            });
+            
+            // Also check manual input
+            const manualInput = document.getElementById('manual_columns').value;
+            if (manualInput.trim()) {
+                const manualColumns = manualInput.split(',').map(col => col.trim().toLowerCase());
+                manualColumns.forEach(col => selectedColumns.add(col));
+            }
+            
+            // Update display
+            const selectedDisplay = document.getElementById('selected_columns_display');
+            const selectedSection = document.getElementById('selected_columns_section');
+            const columnsInput = document.getElementById('columns_input');
+            
+            if (selectedColumns.size > 0) {
+                const columnsArray = Array.from(selectedColumns);
+                selectedDisplay.innerHTML = columnsArray.map(col => 
+                    `<span class="selected-column">${col}</span>`
+                ).join('');
+                columnsInput.value = columnsArray.join(',');
+                selectedSection.style.display = 'block';
+            } else {
+                selectedSection.style.display = 'none';
+                columnsInput.value = '';
+            }
+        }
+        
+        // Update columns when data start row changes
+        document.getElementById('data_start_row_csv1').addEventListener('change', () => {
+            if (document.getElementById('csv1_file').files[0]) {
+                loadColumns('csv1');
+            }
+        });
+        
+        document.getElementById('data_start_row_csv2').addEventListener('change', () => {
+            if (document.getElementById('csv2_file').files[0]) {
+                loadColumns('csv2');
+            }
+        });
+    </script>
+</body>
 </html>
+
